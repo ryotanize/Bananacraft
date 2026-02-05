@@ -1,0 +1,14 @@
+[Unit]
+Description=Minecraft Server
+After=network.target
+
+[Service]
+User=nakanishi
+WorkingDirectory=/home/nakanishi/minecraft_server
+# Adjust memory (Xms/Xmx) based on GCE instance type
+ExecStart=/usr/bin/java -Xms2G -Xmx6G -jar server.jar --nogui
+Restart=always
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

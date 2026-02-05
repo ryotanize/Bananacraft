@@ -1,0 +1,10 @@
+streamlit
+pandas
+altair
+pillow
+numpy
+google-genai
+python-dotenv
+scikit-image
+mcrcon
+plotly

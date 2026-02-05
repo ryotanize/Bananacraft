@@ -1,0 +1,14 @@
+[Unit]
+Description=Bananacraft Streamlit App
+After=network.target
+
+[Service]
+User=nakanishi
+WorkingDirectory=/home/nakanishi/bananacraft-core
+ExecStart=/home/nakanishi/bananacraft-core/venv/bin/streamlit run app/main.py --server.port 8501 --server.headingsWithAnchors=false
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/nakanishi/bananacraft-core/.env
+
+[Install]
+WantedBy=multi-user.target
