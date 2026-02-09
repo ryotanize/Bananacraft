@@ -8,3 +8,5 @@ python-dotenv
 scikit-image
 mcrcon
 plotly
+trimesh
+matplotlib

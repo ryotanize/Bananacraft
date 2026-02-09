@@ -1164,11 +1164,34 @@ elif st.session_state.phase == 3:
                              "block": b_type
                          })
                          
-                     # Add Decoration (already in bot format in plan['instructions'])
-                     # But we should ensure no duplicates? 
-                     # For now, just append. Decoration comes last, so it overwrites (replace) structure if overlap.
-                     deco_bot_instr = plan.get('instructions', [])
-                     final_instructions.extend(deco_bot_instr)
+                     # Add Decoration (Resolve instructions -> blocks first)
+                     # Load Analyzer context for accurate placement
+                     inst_file_dec = f"building_{zone['id']}_instructions.json"
+                     inst_data_dec = []
+                     if fm.exists(inst_file_dec):
+                         inst_data_dec = fm.load_json(inst_file_dec)
+                     analyzer_dec = BlueprintAnalyzer(inst_data_dec)
+                     
+                     # Resolve to blocks
+                     deco_blocks = carpenter.build_from_json(plan, analyzer=analyzer_dec)
+                     
+                     for b in deco_blocks:
+                         b_type = b['type']
+                         # Force persistent leaves for decoration
+                         if "leaves" in b_type:
+                             if "persistent=true" not in b_type:
+                                 if "[" in b_type:
+                                     b_type = b_type.replace("]", ",persistent=true]")
+                                 else:
+                                     b_type += "[persistent=true]"
+                                     
+                         final_instructions.append({
+                             "x": b['x'],
+                             "y": b['y'],
+                             "z": b['z'],
+                             "action": "setblock",
+                             "block": b_type
+                         })
                      
                      # Save
                      final_file = "full_build.json"

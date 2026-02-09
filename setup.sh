@@ -5,7 +5,13 @@ echo "🍌 Bananacraft GCE Setup Script"
 
 # 1. Update System
 echo "Updating system..."
-sudo apt-get update && sudo apt-get install -y git python3-pip python3-venv openjdk-17-jre-headless nodejs npm screen
+sudo apt-get update
+sudo apt-get install -y git python3-pip python3-venv openjdk-17-jre-headless screen curl
+
+# Install Node.js 22
+echo "Installing Node.js 22..."
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
 
 # 2. Setup Python Environment
 echo "Setting up Python..."
