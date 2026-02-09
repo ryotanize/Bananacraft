@@ -768,6 +768,16 @@ elif st.session_state.phase == 3:
                         rcon = RconClient()
                         blocks = fm.load_json(v2_blocks_file)
                         
+                        # Fix: Force persistent leaves for structure execution
+                        for b in blocks:
+                            b_type = b['type']
+                            if "leaves" in b_type:
+                                if "persistent=true" not in b_type:
+                                    if "[" in b_type:
+                                        b["type"] = b_type.replace("]", ",persistent=true]")
+                                    else:
+                                        b["type"] = b_type + "[persistent=true]"
+                        
                         # Build at absolute location
                         # blocks_v2 already has relative coordinates (x, y, z)
                         # rcon.build_voxels adds origin to them
