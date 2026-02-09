@@ -38,6 +38,8 @@ from v2.architect import Architect
 from v2.carpenter import CarpenterSession
 from v2.decorator import Decorator
 from v2.preview import create_3d_preview 
+from v2.city_planner import CityPlanner
+from v2.blueprint_analyzer import BlueprintAnalyzer 
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -124,6 +126,32 @@ with st.sidebar:
         
         st.divider()
         
+        # --- Terraforming (Moved to Sidebar) ---
+        st.subheader("🚜 Terraformer")
+        st.caption(f"Area: ({origin_x}, {origin_z}) to ({origin_x+200}, {origin_z+200})")
+        
+        if st.button("Run Terraformer (Clear 200x200)"):
+             try:
+                 with st.spinner("Clearing area & Fixing chunks..."):
+                     # Connect to RCON
+                     rcon = RconClient()
+                     terra = Terraformer(rcon)
+                     
+                     # Use the *current* input values, not just saved ones, 
+                     # but typically we should use saved. 
+                     # Let's use the input values from st.number_input above to be responsive.
+                     
+                     target_origin = (int(origin_x), int(origin_y), int(origin_z))
+                     
+                     logs = terra.terraform(target_origin, width=200, depth=200, base_y=target_origin[1])
+                     st.success("Terraforming Complete!")
+                     with st.expander("Logs"):
+                         st.write(logs)
+             except Exception as e:
+                 st.error(f"Terraforming Failed: {e}")
+        
+        st.divider()
+        
         if st.button("プロジェクトを閉じる"):
             st.session_state.clear()
             st.rerun()
@@ -169,7 +197,11 @@ if st.session_state.phase == 0:
                         "image_path": os.path.join(fm.project_dir, "concept_art.jpg")
                     }
                 
-                if fm.exists("zoning_data.json"):
+                # Dynamic Zoning Adjustment Support
+                if fm.exists("zoning_adjusted.json"):
+                    st.session_state.zoning = fm.load_json("zoning_adjusted.json")
+                    st.toast("Loaded Adjusted Zoning Plan", icon="📏")
+                elif fm.exists("zoning_data.json"):
                     st.session_state.zoning = fm.load_json("zoning_data.json")
 
                 st.session_state.phase = 1
@@ -395,8 +427,21 @@ elif st.session_state.phase == 1:
                                 # No, 'Carpenter.build' returns Block dicts. 
                                 # We need RconClient to send them.
                                 
+                                # Load Project Config for Origin
+                                config_path = "project_config.json"
+                                origin_setting = {"x": 0, "y": 64, "z": 0}
+                                if fm.exists(config_path):
+                                    cfg = fm.load_json(config_path)
+                                    origin_setting = cfg.get("origin", origin_setting)
+                                
+                                ox = origin_setting['x']
+                                oy = origin_setting['y']
+                                oz = origin_setting['z']
+                                
+                                st.info(f"Building Infrastructure at Origin: ({ox}, {oy}, {oz})")
+
                                 # Initialize Session
-                                session = CarpenterSession(origin=(0, 64, 0)) # Default Origin
+                                session = CarpenterSession(origin=(ox, oy, oz)) 
                                 blocks_to_place = session.build_from_json(plan)
                                 
                                 # Send via RCON
@@ -419,6 +464,13 @@ elif st.session_state.phase == 1:
         for i, b in enumerate(buildings):
             with cols[i % 3]:
                 with st.container(border=True):
+                    # Thumbnail
+                    thumb_file = f"design_{b['id']}_decorated.jpg"
+                    if fm.exists(thumb_file):
+                        st.image(os.path.join(fm.project_dir, thumb_file), use_container_width=True)
+                    else:
+                        st.info("No Design", icon="⬜")
+                        
                     st.markdown(f"**{i+1}. {b['name']}**")
                     st.caption(f"{b['type']} | ({b['position']['x']}, {b['position']['z']})")
                     if st.button(f"Design This", key=f"btn_{i}"):
@@ -623,9 +675,45 @@ elif st.session_state.phase == 2:
                                     
                                     # Save
                                     fm.save_json(blocks_file, blocks)
-                                    st.success(f"Construction Complete! Generated {len(blocks)} blocks.")
+                                    
+                                    # --- Dynamic Zoning Adjustment ---
+                                    # FIX: Import path must be relative to execution root
+                                    try:
+                                        from app.v2.layout_engine import LayoutEngine
+                                    except ImportError:
+                                        # Fallback if running directly inside app/
+                                        from v2.layout_engine import LayoutEngine
+                                    
+                                    # Load current source of truth for zoning
+                                    current_zoning = []
+                                    if fm.exists("zoning_adjusted.json"):
+                                        current_zoning = fm.load_json("zoning_adjusted.json")
+                                    elif fm.exists("zoning_data.json"):
+                                        current_zoning = fm.load_json("zoning_data.json")
+                                    
+                                    if current_zoning:
+                                        engine = LayoutEngine(current_zoning)
+                                        # Update dimensions
+                                        updated = engine.update_zone_from_blocks(zone['id'], blocks)
+                                        if updated:
+                                            # Resolve collisions (shift coordinates if needed)
+                                            moved = engine.resolve_collisions(zone['id'])
+                                            
+                                            # Save adjusted plan
+                                            new_zoning = engine.get_zones()
+                                            fm.save_json("zoning_adjusted.json", new_zoning)
+                                            st.session_state.zoning = new_zoning # Update state
+                                            
+                                            msg = "Construction Data Generated."
+                                            if moved:
+                                                msg += " (Zone Adjusted to avoid collision!)"
+                                            st.success(msg)
+                                    else:
+                                        st.success(f"Construction Complete! Generated {len(blocks)} blocks.")
+                                        
                                     st.rerun()
                             except Exception as e:
+                                st.error(f"Construction Error: {e}")
                                 st.error(f"Construction Error: {e}")
                     
                     # Preview Section
@@ -655,24 +743,7 @@ elif st.session_state.phase == 3:
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("1. Terraforming (整地)")
-        st.caption(f"Target Area: {current_origin} to ({current_origin[0]+200}, {current_origin[1]}, {current_origin[2]+200})")
-        
-        if st.button("🚜 Run Terraformer"):
-            try:
-                with st.spinner("Clearing area & Fixing chunks..."):
-                    rcon = RconClient()
-                    terra = Terraformer(rcon)
-                    logs = terra.terraform(current_origin, width=200, depth=200, base_y=current_origin[1])
-                    st.success("Terraforming Complete!")
-                    with st.expander("Logs"):
-                        st.write(logs)
-            except Exception as e:
-                st.error(f"Terraforming Failed: {e}")
-
-        st.divider()
-
-        st.subheader("2. Structure Build")
+        st.subheader("Structure Build")
         st.info("Deploy the blueprint to the Minecraft Server.")
         
         # Load Zoning Data to get Offset
@@ -707,6 +778,127 @@ elif st.session_state.phase == 3:
                              st.write(log)
                 except Exception as e:
                     st.error(f"Build Failed: {e}")
+            
+            # --- Reset / Clear Function ---
+            st.markdown("---")
+            if st.button("🗑️ Clear Area (Reset)", help="Fills the building area with air (Above ground only)."):
+                try:
+                    with st.spinner("Clearing area (Calculated from Structure)..."):
+                        rcon = RconClient()
+                        
+                        # 1. Try to get bounds from actual blocks
+                        # v2_blocks_file is defined above
+                        
+                        final_x1, final_y1, final_z1 = 0, 0, 0
+                        final_x2, final_y2, final_z2 = 0, 0, 0
+                        
+                        if fm.exists(v2_blocks_file):
+                            blocks = fm.load_json(v2_blocks_file)
+                            if blocks:
+                                # blocks are relative to build_origin (which has Y=0 usually)
+                                # but the blocks inside have Y=64 etc.
+                                
+                                # Calculate relative min/max
+                                xs = [b['x'] for b in blocks]
+                                ys = [b['y'] for b in blocks]
+                                zs = [b['z'] for b in blocks]
+                                
+                                min_rx, max_rx = min(xs), max(xs)
+                                min_ry, max_ry = min(ys), max(ys)
+                                min_rz, max_rz = min(zs), max(zs)
+                                
+                                # Apply build_origin offset
+                                # FIX: Reverting previous change. Blocks ARE relative.
+                                # user confirmed "363, 64..." was correct area, but volume was issue.
+                                # So we MUST add ox, oy, oz.
+                                
+                                ox, oy, oz = build_origin
+                                
+                                # FIX: Y-Alignment.
+                                # blocks_v2 have Y ~ 64. build_origin has Y=0. Result = 64.
+                                # But if user World Origin Y is 100, building is at 100.
+                                # We MUST use current_origin[1] as base.
+                                
+                                final_x1 = ox + min_rx - 2
+                                final_z1 = oz + min_rz - 2
+                                
+                                # Use User's Y, plus building height
+                                # Assume building starts at base.
+                                height = max_ry - min_ry
+                                final_y1 = current_origin[1] 
+                                final_y2 = final_y1 + height + 5
+                                
+                                final_x2 = ox + max_rx + 2
+                                final_z2 = oz + max_rz + 2
+                                
+                                st.info(f"Detected Structure Bounds: {final_x1},{final_y1},{final_z1} to {final_x2},{final_y2},{final_z2}")
+                            else:
+                                # Empty blocks file? Fallback
+                                final_x1 = build_origin[0]
+                                final_y1 = current_origin[1]
+                                final_z1 = build_origin[2]
+                                final_x2 = final_x1 + zone['position']['width']
+                                final_y2 = final_y1 + 100
+                                final_z2 = final_z1 + zone['position']['depth']
+                        else:
+                            # Fallback to Zoning
+                            final_x1 = build_origin[0]
+                            final_y1 = current_origin[1]
+                            final_z1 = build_origin[2]
+                            final_x2 = final_x1 + zone['position']['width']
+                            final_y2 = final_y1 + 100
+                            final_z2 = final_z1 + zone['position']['depth']
+                            
+                        st.warning(f"Target Area: {final_x1},{final_y1},{final_z1} to {final_x2},{final_y2},{final_z2}")
+                        
+                        # Chunking to avoid volume limit (32768 blocks)
+                        # Area = (x2-x1) * (z2-z1) * h
+                        # We slice by Height (Y)
+                        
+                        y_start = final_y1
+                        y_end = final_y2
+                        # FIX: chunk_height of 10 means 11 layers inclusive (y to y+10).
+                        # Area 55x55 = 3025 blocks. 3025 * 11 = 33275 > 32768 limit!
+                        # So we must reduce height. 
+                        # 32768 / 3025 = 10.8. Max 10 layers safe.
+                        # chunk_height = 8 means 9 layers (y to y+8). Safe.
+                        chunk_height = 8
+                        
+                        cmds = []
+                        while y_start < y_end:
+                            y_chunk_end = min(y_start + chunk_height, y_end)
+                            # Ensure we don't exceed y_end
+                            
+                            cmd = f"fill {final_x1} {y_start} {final_z1} {final_x2} {y_chunk_end} {final_z2} air"
+                            cmds.append(cmd)
+                            y_start = y_chunk_end + 1 # Move to next layer? fill is inclusive.
+                            # if chunk is 64 to 74. Next should be 75.
+                            # fill x1 y1 z1 x2 y2 z2 replaces inclusive.
+                            
+                            # Wait, logic above:
+                            # y_start = 64. y_chunk_end = 74. 
+                            # fill ... 64 ... 74 ...
+                            # next y_start should be 75. 
+                            y_start = y_chunk_end + 1
+                        
+                        st.info(f"Splitting into {len(cmds)} commands to fit volume limits.")
+                        
+                        # Fix: Ensure chunks are loaded!
+                        # Use forceload
+                        fl_add = f"forceload add {final_x1} {final_z1} {final_x2} {final_z2}"
+                        fl_remove = f"forceload remove {final_x1} {final_z1} {final_x2} {final_z2}"
+                        
+                        full_cmds = [fl_add] + cmds + [fl_remove]
+                        
+                        log = rcon.connect_and_send(full_cmds)
+                        
+                        st.success(f"Area Cleared!")
+                        with st.expander("Detailed RCON Logs"):
+                            for l in log:
+                                st.text(l)
+                        
+                except Exception as e:
+                    st.error(f"Clear Failed: {e}")
         else:
             st.warning(f"No blueprint found ({v2_blocks_file}). Please complete Phase 2.")
             if st.button("Back to Phase 2"):
@@ -715,6 +907,11 @@ elif st.session_state.phase == 3:
 
     with col2:
         st.subheader("3. AI Decoration (Bot)")
+        
+        # Initialize session state for decoration if needed
+        if 'decoration_status' not in st.session_state:
+            st.session_state.decoration_status = None
+            
         # A. Analyze & Plan
         if st.button("🎨 Generate Decoration Plan"):
             with st.spinner("Gemini is analyzing structure & concept..."):
@@ -763,139 +960,162 @@ elif st.session_state.phase == 3:
                         deco_file = f"building_{zone['id']}_decoration.json"
                         deco_instructions_list = []
                         
-                        if fm.exists(deco_file):
-                            st.info(f"Loading existing decoration plan: {deco_file}")
-                            raw_data = fm.load_json(deco_file)
-                            deco_instructions_list = raw_data
+                        # Generate new (Always regen on button click or load existing?)
+                        # Button says "Generate", so we force regen or at least load logic
+                        
+                        # Load actual blocks for accurate placement
+                        blocks_file = f"building_{zone['id']}_blocks_v2.json"
+                        structure_blocks = []
+                        if fm.exists(blocks_file):
+                             raw_blocks = fm.load_json(blocks_file)
+                             if raw_blocks:
+                                 min_y = min(b['y'] for b in raw_blocks)
+                                 # Shift everyone down
+                                 structure_blocks = [
+                                     {**b, 'y': b['y'] - min_y} 
+                                     for b in raw_blocks
+                                 ]
                         else:
-                             # Load actual blocks for accurate placement
-                             blocks_file = f"building_{zone['id']}_blocks_v2.json"
+                             st.warning(f"No block data found ({blocks_file}). Using instructions fallback.")
                              structure_blocks = []
-                             if fm.exists(blocks_file):
-                                 raw_blocks = fm.load_json(blocks_file)
-                                 # Normalize blocks to Y=0 base
-                                 # The blocks in file are at Y=64 (default carpenter)
-                                 # We want Decorator to see a building at Y=0
-                                 if raw_blocks:
-                                     min_y = min(b['y'] for b in raw_blocks)
-                                     # Shift everyone down
-                                     structure_blocks = [
-                                         {**b, 'y': b['y'] - min_y} 
-                                         for b in raw_blocks
-                                     ]
-                             else:
-                                 st.warning(f"No block data found ({blocks_file}). Using instructions fallback.")
-                                 # Fallback? But we changed the signature. 
-                                 # Whatever, empty list will trigger naive placement (or fail prompt context).
-                                 structure_blocks = []
 
-                             # Generate new
-                             deco_instructions_objects = dec.generate_decoration_plan(
-                                 image_path=image_path,
-                                 concept_text=concept,
-                                 structure_blocks=structure_blocks,
-                                 building_info=b_info
-                             )
-                             if deco_instructions_objects:
-                                 deco_instructions_list = [i.to_dict() for i in deco_instructions_objects]
-                                 fm.save_json(deco_file, deco_instructions_list)
-                        
-                        # B. Execution (Manual -> Bot)
-                        if deco_instructions_list:
-                            st.subheader("B. Execute Decoration")
-                            st.write(f"Plan ready with {len(deco_instructions_list)} instructions.")
-                            
-                            # Existing file for Bot
-                            # The bot reads from projects/<Project>/<File>
-                            # Our file is "building_<ID>_decoration.json" in projects/<Project>/
-                            
-                            target_file_name = f"building_{zone['id']}_decoration.json"
-                            
-                            if st.button("👷 Run AI Carpenter (Auto)"):
-                                try:
-                                    with st.spinner("AI Carpenter is working... (This may take a minute)"):
-                                        # Use CarpenterSession to run bot
-                                        cs = CarpenterSession()
-                                        
-                                        # origin is needed? 
-                                        # The bot logic in index.js says: if origin provided, use it. 
-                                        # Else find player.
-                                        # We prefer provided origin for stability.
-                                        # Use 'build_origin' calculated in Structure Build section
-                                        
-                                        # build_origin = (abs_x, abs_y, abs_z)
-                                        # But wait, decoration blocks might be relative to 0,0,0 if we shifted them?
-                                        # In 'generate_decoration_plan', we passed structure_blocks normalized to 0.
-                                        # The OUTPUT of decorator (instructions) are usually relative to the building origin?
-                                        # Let's check decorator.py output. usually relative.
-                                        # So we pass the same build_origin as the structure.
-                                        
-                                        # One catch: Decoration instructions X,Y,Z are relative to what?
-                                        # If the plan was generated based on normalized Y=0 blocks, 
-                                        # and the bot applies them at 'origin', then 'origin' should be the building corner.
-                                        # Yes, build_origin is the correct origin.
-                                        
-                                        result_log = cs.run_bot(
-                                            project_name=st.session_state.project_name, 
-                                            target_file=target_file_name,
-                                            origin=build_origin
-                                        )
-                                        
-                                        st.success("Decoration Complete!")
-                                        with st.expander("Carpenter Bot Logs"):
-                                            st.code(result_log)
-                                            
-                                except Exception as e:
-                                    st.error(f"Bot Execution Failed: {e}")
-                            
-                            st.caption("Legacy Manual Command:")
-                            st.code(f"node AI_Carpenter_Bot/index.js {st.session_state.project_name} {build_origin[0]} {build_origin[1]} {build_origin[2]} {target_file_name}")
-
-                        
-                        if deco_instructions_list:
-                             st.success(f"Decoration Plan Ready! ({len(deco_instructions_list)} steps)")
-                             
-                             # Convert high-level tools to raw blocks for Bot
-                             try:
-                                 # Use Carpenter to calculate blocks
-                                 # NOTE: Use (0,0,0) origin here so blocks are relative to the building's 0-point,
-                                 # not shifted by default Y=64. The Bot script adds the actual world origin Y.
-                                 carpenter = CarpenterSession(origin=(0, 0, 0))
-                                 # Note: decorator instructions might need to be wrapped or passed directly
-                                 # build_from_json expects list of dicts with 'tool_name' etc.
-                                 deco_blocks = carpenter.build_from_json(deco_instructions_list)
-                                 
-                                 # Convert blocks to Bot format
-                                 # Bot expects: {x, y, z, action='setblock', block='material'}
-                                 bot_instructions = []
-                                 for b in deco_blocks:
-                                     block_type = b['type']
-                                     # Force persistent leaves to prevent decay regardless of logs
-                                     if "leaves" in block_type and "[" not in block_type:
-                                         block_type += "[persistent=true]"
-                                         
-                                     bot_instructions.append({
-                                         "x": b['x'],
-                                         "y": b['y'],
-                                         "z": b['z'],
-                                         "action": "setblock",
-                                         "block": block_type
-                                     })
-                                     
-                                 # Save for Bot
-                                 fm.save_json("decoration.json", {"instructions": bot_instructions})
-                                 st.success(f"Bot Instructions Generated! ({len(bot_instructions)} blocks)")
-                                 
-                             except Exception as e:
-                                 st.error(f"Carpenter Processing Failed: {e}")
-
-                             with st.expander("View Decoration Plan"):
-                                 st.json(deco_instructions_list)
+                        # Generate new
+                        deco_instructions_objects = dec.generate_decoration_plan(
+                             image_path=image_path,
+                             concept_text=concept,
+                             structure_instructions=instructions_data,
+                             building_info=b_info
+                        )
+                        if deco_instructions_objects:
+                             deco_instructions_list = [i.to_dict() for i in deco_instructions_objects]
+                             fm.save_json(deco_file, deco_instructions_list)
+                             st.session_state.decoration_status = "Generated"
+                             st.success(f"Decoration Plan Generated! ({len(deco_instructions_list)} steps)")
                         else:
-                            st.warning("No decorations generated.")
-                            
+                             st.error("Failed to generate decoration instructions.")
+
                 except Exception as e:
                     st.error(f"Decoration Planning Failed: {e}")
+
+        # B. Execution (Manual -> Bot)
+        # Check if file exists to show the button (Persistent state)
+        deco_file_check = f"building_{zone['id']}_decoration.json"
+        
+        if fm.exists(deco_file_check):
+            st.divider()
+            st.subheader("B. Execute Decoration")
+            
+            # Use columns for layout
+            dc1, dc2 = st.columns([1, 1])
+            with dc1:
+                st.info("Decoration Plan Available")
+                if st.button("View Plan JSON"):
+                    st.json(fm.load_json(deco_file_check), expanded=False)
+
+            with dc2:
+                if st.button("👷 Run AI Carpenter (Auto)"):
+                     try:
+                        with st.spinner("AI Carpenter is working... (This may take a minute)"):
+                            # Use CarpenterSession to run bot
+                            cs = CarpenterSession()
+                            
+                            # Calculate origin again or retrieve
+                            # build_origin should be in scope? No, it was calculated in col1.
+                            # We need to recalculate it or grab from session/config.
+                            # But wait, phase 2 doesn't blindly have 'build_origin'.
+                            # It relies on 'saved_origin' global.
+                            
+                            # Re-read global config
+                            config_path_g = "project_config.json"
+                            p_conf = {}
+                            if fm.exists(config_path_g):
+                                p_conf = fm.load_json(config_path_g)
+                            saved_origin_g = p_conf.get("origin", {"x": 0, "y": 64, "z": 0})
+                            
+                            # Zone position
+                            z_ox = zone['position']['x']
+                            z_oz = zone['position']['z']
+                            
+                            # BUT wait, did we shift the zone in `LayoutEngine`? 
+                            # 'zone' variable comes from st.session_state.selected_zone.
+                            # Is selected_zone updated when zoning.json updates?
+                            # Not automatically unless we re-select it or refresh 'st.session_state.zoning'.
+                            # We should re-fetch the latest zone data to be safe.
+                            
+                            # Refetch zone
+                            # `st.session_state.zoning` might be a dict (zoning_adjusted) or list (zoning_data legacy)
+                            zoning_source = st.session_state.zoning
+                            if isinstance(zoning_source, dict):
+                                zoning_source = zoning_source.get('buildings', [])
+                                
+                            latest_zone = next((z for z in zoning_source if z['id'] == zone['id']), zone)
+                            z_ox = latest_zone['position']['x']
+                            z_oz = latest_zone['position']['z']
+                            
+                            current_origin = (saved_origin_g['x'], saved_origin_g['y'], saved_origin_g['z'])
+                            build_origin = (
+                                current_origin[0] + z_ox,
+                                current_origin[1], # Y is usually flat
+                                current_origin[2] + z_oz
+                            )
+                            
+                            # Convert plan to bot instructions first!
+                            # The logic to convert to raw blocks was inside the button before.
+                            # We need to ensure decoration.json (bot format) exists.
+                            
+                            # 1. Load Plan
+                            deco_plan = fm.load_json(deco_file_check)
+                            
+                            # 2. Convert to Blocks
+                            carpenter_temp = CarpenterSession(origin=(0,0,0))
+                            # We need structure instructions for context? Analyzer needs them?
+                            # Analyzer uses them to find walls etc.
+                            inst_file_Temp = f"building_{zone['id']}_instructions.json"
+                            inst_data_temp = []
+                            if fm.exists(inst_file_Temp):
+                                inst_data_temp = fm.load_json(inst_file_Temp)
+                                
+                            analyzer_temp = BlueprintAnalyzer(inst_data_temp)
+                            deco_blocks = carpenter_temp.build_from_json(deco_plan, analyzer=analyzer_temp)
+                            
+                            # 3. Format for Bot
+                            bot_instructions = []
+                            for b in deco_blocks:
+                                 block_type = b['type']
+                                 if "leaves" in block_type and "persistent=true" not in block_type:
+                                     if "[" in block_type:
+                                         block_type = block_type.replace("]", ",persistent=true]")
+                                     else:
+                                         block_type += "[persistent=true]"
+                                 bot_instructions.append({
+                                     "x": b['x'], "y": b['y'], "z": b['z'],
+                                     "action": "setblock", "block": block_type
+                                 })
+                            
+                            # 4. Save decoration.json (Target for bot)
+                            # Bot script expects "decoration.json"? 
+                            # The previous code used `target_file=target_file_name`. MAKE SURE names match.
+                            # Previous code: `target_file_name = f"building_{zone['id']}_decoration.json"`
+                            # BUT `fm.save_json("decoration.json", ...)` was used inside.
+                             
+                            # Actually, `run_bot` takes `target_file`. 
+                            # If we save to `temp_bot_instructions.json`, we pass that.
+                            bot_target_file = f"bot_instructions_{zone['id']}.json"
+                            fm.save_json(bot_target_file, {"instructions": bot_instructions})
+                            
+                            result_log = cs.run_bot(
+                                project_name=st.session_state.project_name, 
+                                target_file=bot_target_file,
+                                origin=build_origin
+                            )
+                            
+                            st.success("Decoration Complete!")
+                            st.session_state.decoration_status = "Executed"
+                            with st.expander("Carpenter Bot Logs"):
+                                st.code(result_log)
+                                
+                     except Exception as e:
+                        st.error(f"Bot Execution Failed: {e}")
         
         # Show Plan if exists
         if fm.exists("decoration.json"):
@@ -927,12 +1147,21 @@ elif st.session_state.phase == 3:
                      
                      # Add Structure
                      for b in structure_blocks:
+                         b_type = b['type']
+                         # Force persistent leaves for structure too
+                         if "leaves" in b_type:
+                             if "persistent=true" not in b_type:
+                                 if "[" in b_type:
+                                     b_type = b_type.replace("]", ",persistent=true]")
+                                 else:
+                                     b_type += "[persistent=true]"
+                                     
                          final_instructions.append({
                              "x": b['x'],
                              "y": b['y'],
                              "z": b['z'],
                              "action": "setblock",
-                             "block": b['type']
+                             "block": b_type
                          })
                          
                      # Add Decoration (already in bot format in plan['instructions'])
@@ -995,11 +1224,15 @@ elif st.session_state.phase == 3:
                 abs_y = current_origin[1]
                 abs_z = current_origin[2] + zone['position']['z']
                 
-                cmd = f"node AI_Carpenter_Bot/index.js {project_id} {abs_x} {abs_y} {abs_z}"
+                cmd = f"node AI_Carpenter_Bot/index.js {project_id} {abs_x} {abs_y} {abs_z} decoration.json"
                 st.code(cmd, language="bash")
                 st.warning("Run this to build DECORATION ONLY.")
 
     st.divider()
+    if st.button("⬅️ Back to Building List"):
+        st.session_state.phase = 1
+        st.rerun()
+
     if st.button("Restart Project"):
         st.session_state.clear()
         st.rerun()

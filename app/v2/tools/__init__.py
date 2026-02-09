@@ -1,41 +1,36 @@
 """
-Carpenter's Toolbox - Building tools for Bananacraft 2.0
+Tools Registry for Bananacraft 2.0
 """
-from .base import BaseTool
-from .plane import PlaneTool
 from .wall import DrawWallTool
+from .plane import PlaneTool
+from .curve import CurveLoftTool
 from .pillar import PlacePillarTool
 from .window import PlaceWindowTool
 from .door import PlaceDoorTool
 from .decoration import PlaceDecorationTool
-from .curve import CurveLoftTool
 from .infrastructure import DrawRoadTool, FillZoneTool, PlaceStreetDecorTool
+# New
+from .detailer import DecorateElementTool
 
-# Tool registry - maps tool names to their implementations
 TOOL_REGISTRY = {
+    # Structure
     "draw_wall": DrawWallTool,
-    "place_smart_pillar": PlacePillarTool,
     "draw_plane": PlaneTool,
+    "place_smart_pillar": PlacePillarTool,
+    "draw_curve_loft": CurveLoftTool,
     "place_window": PlaceWindowTool,
     "place_door": PlaceDoorTool,
+    
+    # Old Decoration (Legacy support)
     "place_decoration": PlaceDecorationTool,
-    "draw_curve_loft": CurveLoftTool,
+    
+    # New Phase 3 Decoration
+    "decorate_element": DecorateElementTool,
+    
+    # Infrastructure
     "draw_road": DrawRoadTool,
     "fill_zone": FillZoneTool,
     "place_street_decor": PlaceStreetDecorTool,
 }
 
-__all__ = [
-    "BaseTool",
-    "PlaneTool",
-    "DrawWallTool",
-    "PlacePillarTool",
-    "CurveLoftTool",
-    "PlaceWindowTool",
-    "PlaceDoorTool",
-    "PlaceDecorationTool",
-    "DrawRoadTool",
-    "FillZoneTool",
-    "PlaceStreetDecorTool",
-    "TOOL_REGISTRY"
-]
+__all__ = ["TOOL_REGISTRY"]
