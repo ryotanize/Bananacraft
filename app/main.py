@@ -58,6 +58,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Authentication ---
+def check_password():
+    """Returns `True` if the user had a correct password."""
+
+    # 1. No password set in env -> Allow
+    password = os.getenv("STREAMLIT_PASSWORD")
+    if not password:
+        return True
+
+    # 2. Check session state
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # 3. Show Input
+    st.write("# 🔒 Login Required")
+    input_password = st.text_input("Password", type="password", key="password_input")
+    
+    if st.button("Login"):
+        if input_password == password:
+            st.session_state["password_correct"] = True
+            st.rerun()
+        else:
+            st.error("😕 Password incorrect")
+            
+    return False
+
+if not check_password():
+    st.stop()  # Stop execution if not authenticated
+
 # --- Session State Initialization ---
 if 'phase' not in st.session_state:
     st.session_state.phase = 0 # 0 = Project Setup
